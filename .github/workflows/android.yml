@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v0.*'
+    branches: [master]
+  pull_request:
+    branches: [master]
   schedule:
     - cron: '45 18 * * *'
   workflow_dispatch:
@@ -19,6 +22,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
+          submodules: recursive
           fetch-depth: 0
 
       - name: Setup JDK 17
@@ -31,37 +35,54 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Build APK
-        run: ./gradlew assembleRelease
+      - name: Decode Keystore
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v0.'))
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > ${GITHUB_WORKSPACE}/keystore.jks
 
-      - name: Get current date time in PH time
+      - name: Build Release APK and Bundle
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v0.'))
+        run: |
+          ./gradlew assembleRelease bundleRelease \
+            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/keystore.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=key \
+            -Pandroid.injected.signing.key.password=${{ secrets.KEYSTORE_PASSWORD }}
+
+      - name: Build Debug APK (for PRs)
+        if: github.event_name == 'pull_request'
+        run: ./gradlew assembleDebug
+
+      - name: Get current date time
         id: datetime
         run: |
-          # Get current time in PH timezone (UTC+8)
-          PH_TIME=$(TZ='Asia/Manila' date +'%Y%m%d_%I%M%p')
+          PH_TIME=$(TZ='Asia/Manila' date +'%Y%m%d_%H%M')
           echo "filename_time=$PH_TIME" >> $GITHUB_OUTPUT
 
-      - name: Rename APK with timestamp
-        run: |
-          # Find the main APK file and rename it with timestamp
-          APK_FILE=$(find app/build/outputs/apk -name "*.apk" | head -1)
-          if [ -n "$APK_FILE" ]; then
-            cp "$APK_FILE" "app_build_${{ steps.datetime.outputs.filename_time }}.apk"
-          else
-            echo "No APK file found"
-            exit 1
-          fi
-
-      - name: Upload APK artifact
+      - name: Upload Release Artifacts
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v0.'))
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk-${{ steps.datetime.outputs.filename_time }}
-          path: app_build_${{ steps.datetime.outputs.filename_time }}.apk
+          name: release-build-${{ steps.datetime.outputs.filename_time }}
+          path: |
+            app/build/outputs/apk/**/release/*.apk
+            app/build/outputs/bundle/**/*.aab
+          retention-days: 30
 
-      - name: Create GitHub Release (on tag)
+      - name: Upload Debug Artifacts
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-build-${{ steps.datetime.outputs.filename_time }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+      - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v0.')
         uses: softprops/action-gh-release@v2
         with:
-          files: app_build_${{ steps.datetime.outputs.filename_time }}.apk
+          files: |
+            app/build/outputs/apk/**/release/*.apk
+            app/build/outputs/bundle/**/*.aab
           prerelease: true
           draft: true
