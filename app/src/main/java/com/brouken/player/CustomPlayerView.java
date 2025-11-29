@@ -40,8 +40,11 @@ public class CustomPlayerView extends PlayerView implements GestureDetector.OnGe
     private final float IGNORE_BORDER = Utils.dpToPx(24);
     private final float SCROLL_STEP = Utils.dpToPx(16);
     private final float SCROLL_STEP_SEEK = Utils.dpToPx(8);
-    @SuppressWarnings("FieldCanBeLocal")
-    private final long SEEK_STEP = 1000;
+    
+    // New seek constants - 33ms per 8 pixels
+    private final long SEEK_PER_PIXEL_MS = 33; // 33ms per pixel
+    private final float PIXELS_PER_SEEK = 8f; // Update every 8 pixels
+    
     public static final int MESSAGE_TIMEOUT_TOUCH = 400;
     public static final int MESSAGE_TIMEOUT_KEY = 800;
     public static final int MESSAGE_TIMEOUT_LONG = 1400;
@@ -171,8 +174,6 @@ public class CustomPlayerView extends PlayerView implements GestureDetector.OnGe
     public void onShowPress(MotionEvent motionEvent) {
     }
 
-
-
     @Override
     public boolean onSingleTapUp(MotionEvent motionEvent) {
         return false;
@@ -213,7 +214,10 @@ public class CustomPlayerView extends PlayerView implements GestureDetector.OnGe
 
         if (gestureOrientation == Orientation.HORIZONTAL || gestureOrientation == Orientation.UNKNOWN) {
             gestureScrollX += distanceX;
-            if (Math.abs(gestureScrollX) > SCROLL_STEP || (gestureOrientation == Orientation.HORIZONTAL && Math.abs(gestureScrollX) > SCROLL_STEP_SEEK)) {
+            
+            // Calculate the seek amount based on pixels moved
+            float pixelsMoved = Math.abs(gestureScrollX);
+            if (pixelsMoved >= PIXELS_PER_SEEK || gestureOrientation == Orientation.HORIZONTAL) {
                 // Do not show controller if not already visible
                 setControllerAutoShow(false);
 
@@ -234,35 +238,44 @@ public class CustomPlayerView extends PlayerView implements GestureDetector.OnGe
                 }
 
                 gestureOrientation = Orientation.HORIZONTAL;
-                long position = 0;
-                float distanceDiff = Math.max(0.5f, Math.min(Math.abs(Utils.pxToDp(distanceX) / 4), 10.f));
-
+                
+                // Calculate seek amount based on pixels moved (33ms per 8 pixels)
+                int seekSteps = (int) (pixelsMoved / PIXELS_PER_SEEK);
+                long seekAmount = (long) (seekSteps * SEEK_PER_PIXEL_MS);
+                
                 if (PlayerActivity.haveMedia) {
                     if (gestureScrollX > 0) {
-                        if (seekStart + seekChange - SEEK_STEP  * distanceDiff >= 0) {
+                        // Seeking backward
+                        if (seekStart + seekChange - seekAmount >= 0) {
                             PlayerActivity.player.setSeekParameters(SeekParameters.PREVIOUS_SYNC);
-                            seekChange -= SEEK_STEP * distanceDiff;
-                            position = seekStart + seekChange;
+                            seekChange -= seekAmount;
+                            long position = seekStart + seekChange;
                             PlayerActivity.player.seekTo(position);
                         }
                     } else {
+                        // Seeking forward
                         PlayerActivity.player.setSeekParameters(SeekParameters.NEXT_SYNC);
                         if (seekMax == C.TIME_UNSET) {
-                            seekChange += SEEK_STEP * distanceDiff;
-                            position = seekStart + seekChange;
+                            seekChange += seekAmount;
+                            long position = seekStart + seekChange;
                             PlayerActivity.player.seekTo(position);
-                        } else if (seekStart + seekChange + SEEK_STEP < seekMax) {
-                            seekChange += SEEK_STEP  * distanceDiff;
-                            position = seekStart + seekChange;
+                        } else if (seekStart + seekChange + seekAmount < seekMax) {
+                            seekChange += seekAmount;
+                            long position = seekStart + seekChange;
                             PlayerActivity.player.seekTo(position);
                         }
                     }
+                    
+                    // Reset gestureScrollX for next calculation, keeping the remainder
+                    gestureScrollX = pixelsMoved % PIXELS_PER_SEEK;
+                    if (gestureScrollX == 0) gestureScrollX = 0.0001f;
+                    
+                    // Update display
                     String message = Utils.formatMilisSign(seekChange);
                     if (!isControllerFullyVisible()) {
-                        message += "\n" + Utils.formatMilis(position);
+                        message += "\n" + Utils.formatMilis(seekStart + seekChange);
                     }
                     setCustomErrorMessage(message);
-                    gestureScrollX = 0.0001f;
                 }
             }
         }
