@@ -35,19 +35,27 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Decode Keystore
+      - name: Create dummy keystore
         if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v0.'))
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > ${GITHUB_WORKSPACE}/keystore.jks
+          keytool -genkeypair -v \
+            -keystore dummy.keystore \
+            -storepass android \
+            -alias androidkey \
+            -keypass android \
+            -dname "CN=Android, OU=Android, O=Android, L=Unknown, ST=Unknown, C=US" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000
 
       - name: Build Release APK and Bundle
         if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v0.'))
         run: |
           ./gradlew assembleRelease bundleRelease \
-            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/keystore.jks \
-            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=key \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEYSTORE_PASSWORD }}
+            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/dummy.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=androidkey \
+            -Pandroid.injected.signing.key.password=android
 
       - name: Build Debug APK (for PRs)
         if: github.event_name == 'pull_request'
